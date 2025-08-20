@@ -1,4 +1,5 @@
 import os
+import time
 from dotenv import load_dotenv
 from neo4j import GraphDatabase, basic_auth
 
@@ -126,46 +127,54 @@ def main():
     print(f"Split documents into {len(chunks)} chunks for processing.")
 
     # Process each chunk and import the generated graph data into Neo4j
+    max_retries = 3
     for i, chunk in enumerate(chunks):
         document_name = chunk.metadata.get('source', 'Unknown Document').split(os.sep)[-1]
         print(f"\n--- Processing chunk {i+1}/{len(chunks)} from '{document_name}' ---")
 
-        try:
-            # Invoke the chain to get the Cypher queries from the LLM
-            cypher_queries_str = chain.invoke({
-                "input": chunk.page_content,
-                "document_name": document_name
-            })
+        for attempt in range(max_retries):
+            try:
+                # Invoke the chain to get the Cypher queries from the LLM
+                cypher_queries_str = chain.invoke({
+                    "input": chunk.page_content,
+                    "document_name": document_name
+                })
 
-            # --- FIX: Clean the LLM output before processing ---
-            # This removes common artifacts like markdown code blocks or leading text
-            cleaned_str = cypher_queries_str.strip()
-            if cleaned_str.startswith("```cypher"):
-                cleaned_str = cleaned_str[len("```cypher"):].strip()
-            if cleaned_str.startswith("cypher"):
-                cleaned_str = cleaned_str[len("cypher"):].strip()
-            if cleaned_str.endswith("```"):
-                cleaned_str = cleaned_str[:-3].strip()
+                # --- FIX: Clean the LLM output before processing ---
+                # This removes common artifacts like markdown code blocks or leading text
+                cleaned_str = cypher_queries_str.strip()
+                if cleaned_str.startswith("```cypher"):
+                    cleaned_str = cleaned_str[len("```cypher"):].strip()
+                if cleaned_str.startswith("cypher"):
+                    cleaned_str = cleaned_str[len("cypher"):].strip()
+                if cleaned_str.endswith("```"):
+                    cleaned_str = cleaned_str[:-3].strip()
 
 
-            # Split the string of queries into a list of individual queries
-            queries = [q.strip() for q in cleaned_str.split(';') if q.strip()]
+                # Split the string of queries into a list of individual queries
+                queries = [q.strip() for q in cleaned_str.split(';') if q.strip()]
 
-            if not queries:
-                print("LLM returned no queries for this chunk.")
-                continue
+                if not queries:
+                    print("LLM returned no queries for this chunk.")
+                    break # Don't retry if there's nothing to do
 
-            print(f"Generated {len(queries)} Cypher queries.")
+                print(f"Generated {len(queries)} Cypher queries.")
 
-            # Execute each query in a transaction to build the graph
-            with driver.session(database=NEO4J_DATABASE) as session:
-                for query in queries:
-                    session.run(query)
+                # Execute each query in a transaction to build the graph
+                with driver.session(database=NEO4J_DATABASE) as session:
+                    for query in queries:
+                        session.run(query)
 
-            print("Successfully imported chunk into Neo4j.")
+                print("Successfully imported chunk into Neo4j.")
+                break # Exit the retry loop on success
 
-        except Exception as e:
-            print(f"An error occurred while processing chunk {i+1}: {e}")
+            except Exception as e:
+                print(f"Attempt {attempt + 1}/{max_retries} failed: {e}")
+                if attempt + 1 == max_retries:
+                    print(f"Failed to process chunk {i+1} after {max_retries} attempts.")
+                else:
+                    print("Retrying in 3 seconds...")
+                    time.sleep(3)
 
     # Clean up and close the database connection
     driver.close()
