@@ -22,6 +22,9 @@ azure_deployment = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT_NAME")
 neo4j_uri = os.getenv("NEO4J_URI")
 neo4j_user = os.getenv("NEO4J_USERNAME")
 neo4j_password = os.getenv("NEO4J_PASSWORD")
+# Explicitly define the database name for AuraDB
+NEO4J_DATABASE = "neo4j"
+
 
 # --- 2. Define the LLM Prompt for Cypher Generation ---
 # This is the core instruction for the AI. It includes the full, generalized
@@ -93,7 +96,7 @@ def main():
     driver = GraphDatabase.driver(neo4j_uri, auth=basic_auth(neo4j_user, neo4j_password))
 
     # Setup database constraints for data integrity
-    with driver.session() as session:
+    with driver.session(database=NEO4J_DATABASE) as session:
         print("Clearing database for a fresh import...")
         session.run("MATCH (n) DETACH DELETE n")
 
@@ -144,7 +147,7 @@ def main():
             print(f"Generated {len(queries)} Cypher queries.")
 
             # Execute each query in a transaction to build the graph
-            with driver.session() as session:
+            with driver.session(database=NEO4J_DATABASE) as session:
                 for query in queries:
                     session.run(query)
 
