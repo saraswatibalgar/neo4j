@@ -58,11 +58,11 @@ detailed schema below and generate a list of Cypher `MERGE` queries to create th
 **Instructions:**
 1.  Analyze the text to identify all entities that match the schema.
 2.  Generate a `MERGE` query for each unique entity. Use the specified unique property.
-    - Example: `MERGE (p:Persona {name: "Content Moderator"})`
+    - Example: `MERGE (p:Persona {{name: "Content Moderator"}})`
 3.  Generate a `MERGE` query for each relationship identified between the entities.
-    - Example: `MERGE (f:Feature {name: "Content Moderation"})-[:HAS_REQUIREMENT]->(r:Requirement {id: "REQ-078"})`
+    - Example: `MERGE (f:Feature {{name: "Content Moderation"}})-[:HAS_REQUIREMENT]->(r:Requirement {{id: "REQ-078"}})`
 4.  Add the source document relationship for every extracted entity.
-    - Example: `MERGE (p:Persona {name: "Content Moderator"}) MERGE (d:SourceDocument {name: "prd_v2.docx"}) MERGE (p)-[:MENTIONED_IN]->(d)`
+    - Example: `MERGE (p:Persona {{name: "Content Moderator"}}) MERGE (d:SourceDocument {{name: "prd_v2.docx"}}) MERGE (p)-[:MENTIONED_IN]->(d)`
 5.  Return **only** a list of Cypher queries separated by a semicolon (;). Do not add any other text, explanations, or formatting.
 
 ---
