@@ -137,8 +137,19 @@ def main():
                 "document_name": document_name
             })
 
+            # --- FIX: Clean the LLM output before processing ---
+            # This removes common artifacts like markdown code blocks or leading text
+            cleaned_str = cypher_queries_str.strip()
+            if cleaned_str.startswith("```cypher"):
+                cleaned_str = cleaned_str[len("```cypher"):].strip()
+            if cleaned_str.startswith("cypher"):
+                cleaned_str = cleaned_str[len("cypher"):].strip()
+            if cleaned_str.endswith("```"):
+                cleaned_str = cleaned_str[:-3].strip()
+
+
             # Split the string of queries into a list of individual queries
-            queries = [q.strip() for q in cypher_queries_str.split(';') if q.strip()]
+            queries = [q.strip() for q in cleaned_str.split(';') if q.strip()]
 
             if not queries:
                 print("LLM returned no queries for this chunk.")
