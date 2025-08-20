@@ -26,6 +26,8 @@ neo4j_password = os.getenv("NEO4J_PASSWORD")
 # --- 2. Define the LLM Prompt for Cypher Generation ---
 # This is the core instruction for the AI. It includes the full, generalized
 # schema and instructs the model to generate Neo4j MERGE queries directly.
+# NOTE: Words like 'name' and 'id' are escaped with double curly braces {{name}}
+# to prevent the template parser from treating them as input variables.
 
 CYPHER_GENERATION_PROMPT = """
 You are an expert project management analyst and a Neo4j Cypher query expert.
@@ -34,14 +36,14 @@ detailed schema below and generate a list of Cypher `MERGE` queries to create th
 
 **Schema:**
 - **Nodes (Entities):**
-  - `Persona`: A user, actor, or stakeholder. (Unique Property: `name`)
-  - `Feature`: A high-level piece of functionality or a module. (Unique Property: `name`)
-  - `Goal`: A specific action or capability a Persona wants. (Unique Property: `action`)
-  - `Objective`: The business or user benefit. (Unique Property: `benefit`)
-  - `Requirement`: A specific, testable condition the system must meet. (Unique Property: `id`)
-  - `BusinessRule`: A constraint, policy, or business logic. (Unique Property: `rule_id`)
-  - `DataEntity`: A key data object or concept. (Unique Property: `name`)
-  - `SourceDocument`: The origin document for traceability. (Unique Property: `name`)
+  - `Persona`: A user, actor, or stakeholder. (Unique Property: `{{name}}`)
+  - `Feature`: A high-level piece of functionality or a module. (Unique Property: `{{name}}`)
+  - `Goal`: A specific action or capability a Persona wants. (Unique Property: `{{action}}`)
+  - `Objective`: The business or user benefit. (Unique Property: `{{benefit}}`)
+  - `Requirement`: A specific, testable condition the system must meet. (Unique Property: `{{id}}`)
+  - `BusinessRule`: A constraint, policy, or business logic. (Unique Property: `{{rule_id}}`)
+  - `DataEntity`: A key data object or concept. (Unique Property: `{{name}}`)
+  - `SourceDocument`: The origin document for traceability. (Unique Property: `{{name}}`)
 
 - **Relationships (Edges):**
   - `(Persona)-[:WANTS_TO]->(Goal)`
