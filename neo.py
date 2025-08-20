@@ -1,5 +1,6 @@
 import os
 from dotenv import load_dotenv
+from neo4j import GraphDatabase, basic_auth
 
 from langchain_community.document_loaders import DirectoryLoader
 from langchain_text_splitters import TokenTextSplitter
@@ -7,9 +8,8 @@ from langchain_openai import AzureChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-from neo4j import GraphDatabase, basic_auth
-
-# --- 1. Load Environment Variables and Configuration ---
+# --- 1. Load Environment Variables ---
+# Securely loads credentials from the .env file.
 load_dotenv()
 
 # Azure OpenAI credentials
@@ -23,106 +23,116 @@ neo4j_uri = os.getenv("NEO4J_URI")
 neo4j_user = os.getenv("NEO4J_USERNAME")
 neo4j_password = os.getenv("NEO4J_PASSWORD")
 
-# --- 2. Define the Prompt for the LLM ---
-# This prompt instructs the LLM to act as an extractor and
-# directly generate the Cypher queries needed to build the graph.
+# --- 2. Define the LLM Prompt for Cypher Generation ---
+# This is the core instruction for the AI. It includes the full, generalized
+# schema and instructs the model to generate Neo4j MERGE queries directly.
 
 CYPHER_GENERATION_PROMPT = """
 You are an expert project management analyst and a Neo4j Cypher query expert.
-Your task is to extract entities and relationships from the provided text and
-generate a list of Cypher `MERGE` queries to create them in a Neo4j database.
+Your task is to extract entities and relationships from the provided text based on the
+detailed schema below and generate a list of Cypher `MERGE` queries to create them in a Neo4j database.
 
-**Schema & Rules:**
-- **Nodes:**
-  - `Persona`: {name: string}
-  - `Feature`: {name: string}
-  - `Goal`: {action: string}
-  - `Objective`: {benefit: string}
-- **Relationships:**
+**Schema:**
+- **Nodes (Entities):**
+  - `Persona`: A user, actor, or stakeholder. (Unique Property: `name`)
+  - `Feature`: A high-level piece of functionality or a module. (Unique Property: `name`)
+  - `Goal`: A specific action or capability a Persona wants. (Unique Property: `action`)
+  - `Objective`: The business or user benefit. (Unique Property: `benefit`)
+  - `Requirement`: A specific, testable condition the system must meet. (Unique Property: `id`)
+  - `BusinessRule`: A constraint, policy, or business logic. (Unique Property: `rule_id`)
+  - `DataEntity`: A key data object or concept. (Unique Property: `name`)
+  - `SourceDocument`: The origin document for traceability. (Unique Property: `name`)
+
+- **Relationships (Edges):**
   - `(Persona)-[:WANTS_TO]->(Goal)`
-  - `(Feature)-[:INCLUDES]->(Goal)`
   - `(Goal)-[:TO_ACHIEVE]->(Objective)`
+  - `(Feature)-[:HAS_REQUIREMENT]->(Requirement)`
+  - `(Feature)-[:INCLUDES]->(Goal)`
+  - `(Feature)-[:CONSTRAINED_BY]->(BusinessRule)`
+  - `(Feature)-[:MANAGES]->(DataEntity)`
+  - `(Requirement)-[:DERIVED_FROM]->(Objective)`
+  - `(Any Node)-[:MENTIONED_IN]->(SourceDocument)`
 
 **Instructions:**
-1.  For each entity found in the text, generate a `MERGE` query to create the node.
-    - Example Node: `MERGE (p:Persona {name: "Registered User"})`
-2.  For each relationship found, generate a `MERGE` query to create the relationship between the nodes.
-    - Example Relationship: `MERGE (p:Persona {name: "Registered User"})-[:WANTS_TO]->(g:Goal {action: "upload a profile picture"})`
-3.  Return **only** a list of Cypher queries separated by a semicolon (;). Do not add any other text, explanations, or formatting.
-
-**Example Input Text:**
-"The User Profile feature allows Registered Users to upload a profile picture so they can personalize their account."
-
-**Example Output:**
-MERGE (f:Feature {name: "User Profile"});
-MERGE (p:Persona {name: "Registered User"});
-MERGE (g:Goal {action: "upload a profile picture"});
-MERGE (o:Objective {benefit: "personalize their account"});
-MERGE (f)-[:INCLUDES]->(g);
-MERGE (p)-[:WANTS_TO]->(g);
-MERGE (g)-[:TO_ACHIEVE]->(o);
+1.  Analyze the text to identify all entities that match the schema.
+2.  Generate a `MERGE` query for each unique entity. Use the specified unique property.
+    - Example: `MERGE (p:Persona {name: "Content Moderator"})`
+3.  Generate a `MERGE` query for each relationship identified between the entities.
+    - Example: `MERGE (f:Feature {name: "Content Moderation"})-[:HAS_REQUIREMENT]->(r:Requirement {id: "REQ-078"})`
+4.  Add the source document relationship for every extracted entity.
+    - Example: `MERGE (p:Persona {name: "Content Moderator"}) MERGE (d:SourceDocument {name: "prd_v2.docx"}) MERGE (p)-[:MENTIONED_IN]->(d)`
+5.  Return **only** a list of Cypher queries separated by a semicolon (;). Do not add any other text, explanations, or formatting.
 
 ---
-Now, process the following text:
+Now, process the following text from the document named **{document_name}**:
 {input}
 """
 
 # --- 3. Main Script Logic ---
 
 def main():
-    """Main function to run the extraction and import process."""
+    """Main function to run the document extraction and graph import process."""
 
-    # Initialize the Azure OpenAI LLM
+    # Initialize the Azure OpenAI LLM for reliable, structured output
     llm = AzureChatOpenAI(
         openai_api_version=api_version,
         azure_deployment=azure_deployment,
         azure_endpoint=azure_endpoint,
         api_key=azure_api_key,
-        temperature=0.0 # Set to 0 for deterministic, precise query generation
+        temperature=0.0, # Zero temperature for maximum determinism
     )
 
-    # Create the LangChain prompt and chain
+    # Create the LangChain chain to process text and get Cypher queries
     prompt = ChatPromptTemplate.from_template(CYPHER_GENERATION_PROMPT)
     chain = prompt | llm | StrOutputParser()
 
-    # Connect to Neo4j
-    print("Connecting to Neo4j...")
+    # Connect to the Neo4j database
+    print("Connecting to Neo4j database...")
     driver = GraphDatabase.driver(neo4j_uri, auth=basic_auth(neo4j_user, neo4j_password))
 
-    # Setup database: Clear existing data and create constraints
+    # Setup database constraints for data integrity
     with driver.session() as session:
-        print("Clearing the database...")
+        print("Clearing database for a fresh import...")
         session.run("MATCH (n) DETACH DELETE n")
-        
-        print("Setting up constraints...")
-        session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (n:Persona) REQUIRE n.name IS UNIQUE")
-        session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (n:Feature) REQUIRE n.name IS UNIQUE")
-        session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (n:Goal) REQUIRE n.action IS UNIQUE")
-        session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (n:Objective) REQUIRE n.benefit IS UNIQUE")
 
-    # Load documents from the 'documents' folder
-    print("Loading documents...")
-    loader = DirectoryLoader("documents", glob="**/*.*", show_progress=True)
+        print("Setting up unique constraints on nodes...")
+        constraints = {
+            "Persona": "name", "Feature": "name", "Goal": "action",
+            "Objective": "benefit", "Requirement": "id", "BusinessRule": "rule_id",
+            "DataEntity": "name", "SourceDocument": "name"
+        }
+        for label, prop in constraints.items():
+            session.run(f"CREATE CONSTRAINT IF NOT EXISTS FOR (n:{label}) REQUIRE n.{prop} IS UNIQUE")
+
+    # Load all documents from the 'documents' directory using UnstructuredLoader
+    print("Loading documents from the 'documents' folder...")
+    # DirectoryLoader will automatically use UnstructuredLoader for various file types
+    loader = DirectoryLoader("documents", glob="**/*.*", show_progress=True, use_multithreading=True)
     docs = loader.load()
+
     if not docs:
-        print("No documents found in the 'documents' folder. Exiting.")
+        print("No documents found. Please add your project files to the 'documents' folder.")
         driver.close()
         return
 
-    # Split documents into smaller chunks
-    text_splitter = TokenTextSplitter(chunk_size=2048, chunk_overlap=100)
+    # Split documents into manageable chunks for the LLM
+    text_splitter = TokenTextSplitter(chunk_size=2048, chunk_overlap=128)
     chunks = text_splitter.split_documents(docs)
-    print(f"Split documents into {len(chunks)} chunks.")
+    print(f"Split documents into {len(chunks)} chunks for processing.")
 
-    # Process each chunk and import into Neo4j
+    # Process each chunk and import the generated graph data into Neo4j
     for i, chunk in enumerate(chunks):
-        print(f"\n--- Processing chunk {i+1}/{len(chunks)} ---")
-        
+        document_name = chunk.metadata.get('source', 'Unknown Document').split(os.sep)[-1]
+        print(f"\n--- Processing chunk {i+1}/{len(chunks)} from '{document_name}' ---")
+
         try:
-            # Get the Cypher queries from the LLM
-            cypher_queries_str = chain.invoke({"input": chunk.page_content})
-            
-            # Split the string of queries into a list
+            # Invoke the chain to get the Cypher queries from the LLM
+            cypher_queries_str = chain.invoke({
+                "input": chunk.page_content,
+                "document_name": document_name
+            })
+
+            # Split the string of queries into a list of individual queries
             queries = [q.strip() for q in cypher_queries_str.split(';') if q.strip()]
 
             if not queries:
@@ -131,20 +141,21 @@ def main():
 
             print(f"Generated {len(queries)} Cypher queries.")
 
-            # Execute each query to build the graph
+            # Execute each query in a transaction to build the graph
             with driver.session() as session:
                 for query in queries:
                     session.run(query)
-            
+
             print("Successfully imported chunk into Neo4j.")
 
         except Exception as e:
             print(f"An error occurred while processing chunk {i+1}: {e}")
 
-    # Clean up
+    # Clean up and close the database connection
     driver.close()
     print("\n--- Pipeline Complete ---")
-    print("Knowledge graph has been built in your Neo4j Aura database.")
+    print("The knowledge graph has been successfully built in your Neo4j Aura database.")
+    print("You can now explore it using the Neo4j Browser.")
 
 if __name__ == "__main__":
     main()
