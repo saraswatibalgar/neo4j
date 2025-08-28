@@ -1,37 +1,49 @@
-from simplekg import SimpleKGPipeline
+from neo4j import GraphDatabase
+from neo4j_graphrag.experimental.pipeline.kg_builder import SimpleKGPipeline
+from langchain.chat_models import ChatOpenAI
+from langchain.embeddings import OpenAIEmbeddings
 from langchain.document_loaders import PyPDFLoader
+from langchain.prompts import PromptTemplate
+from langchain.chains import LLMChain
 
-# Neo4j config
+# Neo4j connection
 neo4j_config = {
     "uri": "bolt://localhost:7687",
     "username": "neo4j",
     "password": "your_password"
 }
 
-# Initialize pipeline
-pipeline = SimpleKGPipeline(neo4j_config=neo4j_config)
+# Initialize Neo4j driver
+driver = GraphDatabase.driver(neo4j_config["uri"], auth=(neo4j_config["username"], neo4j_config["password"]))
 
-# Example project
-project_name = "Project_X"
-pdf_paths = ["BRD.pdf", "PRD.pdf", "QA.pdf"]
+# Initialize OpenAI model
+llm = ChatOpenAI(model_name="gpt-4", temperature=0)
 
-for pdf_path in pdf_paths:
-    doc_type = pdf_path.split("/")[-1].split(".")[0]
-    
-    # Load PDF and split into chunks
-    pages = PyPDFLoader(pdf_path).load_and_split()
-    
-    # Feed each chunk to the pipeline with metadata
-    for i, chunk in enumerate(pages):
-        pipeline.add_document(
-            text=chunk.page_content,
-            metadata={
-                "project": project_name,
-                "document": doc_type,
-                "chunk_index": i
-            }
-        )
+# Define schema for the knowledge graph
+node_types = ["Project", "Document", "Chunk", "Entity"]
+relationship_types = ["HAS_DOCUMENT", "HAS_CHUNK", "MENTIONS"]
+patterns = [
+    ("Project", "HAS_DOCUMENT", "Document"),
+    ("Document", "HAS_CHUNK", "Chunk"),
+    ("Chunk", "MENTIONS", "Entity")
+]
 
-# Build KG in Neo4j
-pipeline.build()
-print("Neo4j populated successfully!")
+# Initialize the SimpleKGPipeline
+kg_builder = SimpleKGPipeline(
+    llm=llm,
+    driver=driver,
+    embedder=OpenAIEmbeddings(),
+    schema={"node_types": node_types, "relationship_types": relationship_types, "patterns": patterns},
+    from_pdf=True
+)
+
+# Define the PDF file path
+pdf_file_path = "path/to/your/document.pdf"
+
+# Run the pipeline
+await kg_builder.run_async(file_path=pdf_file_path)
+
+# Close the Neo4j driver connection
+driver.close()
+
+print("Knowledge graph populated in Neo4j successfully!")
