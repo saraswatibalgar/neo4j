@@ -1,43 +1,56 @@
 import os
-from langchain.chat_models import init_chat_model
+from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
+from langchain_community.vectorstores import AzureSearch
 from langchain.agents import initialize_agent, AgentType
 from langchain_community.tools import Tool
-from langchain_community.retrievers import AzureAISearchRetriever
 
-# --- Azure environment setup ---
+# --- Azure Setup ---
 AZURE_OPENAI_ENDPOINT = os.environ["AZURE_OPENAI_ENDPOINT"]
 AZURE_OPENAI_KEY = os.environ["AZURE_OPENAI_API_KEY"]
 AZURE_OPENAI_DEPLOYMENT = os.environ["AZURE_OPENAI_DEPLOYMENT"]
-AZURE_SEARCH_INDEX = os.environ["AZURE_AI_SEARCH_INDEX_NAME"]
+AZURE_SEARCH_SERVICE = os.environ["AZURE_AI_SEARCH_SERVICE_NAME"]
+AZURE_SEARCH_API_KEY = os.environ["AZURE_AI_SEARCH_API_KEY"]
+AZURE_SEARCH_INDEX = "langchain-vector-demo"  # change if needed
 
-# --- LLM (Azure OpenAI) ---
-llm = init_chat_model(
-    f"azure_openai:{AZURE_OPENAI_DEPLOYMENT}",
+# --- 1. Initialize Embeddings ---
+embeddings = AzureOpenAIEmbeddings(
+    azure_deployment="text-embedding-3-small",  # or your embedding model name
     azure_endpoint=AZURE_OPENAI_ENDPOINT,
-    azure_api_key=AZURE_OPENAI_KEY,
-    temperature=0
+    api_key=AZURE_OPENAI_KEY,
 )
 
-# --- Azure AI Search retriever ---
-retriever = AzureAISearchRetriever(
-    content_key="content",
-    top_k=5,
-    index_name=AZURE_SEARCH_INDEX
+# --- 2. Create AzureSearch Vector Store ---
+vector_store = AzureSearch(
+    embedding_function=embeddings.embed_query,
+    azure_search_endpoint=AZURE_SEARCH_SERVICE,
+    azure_search_key=AZURE_SEARCH_API_KEY,
+    index_name=AZURE_SEARCH_INDEX,
 )
 
-# --- Define retriever as a LangChain Tool ---
-def search_azure(query: str) -> str:
-    """Retrieve relevant info from Azure AI Search"""
+# --- 3. Create Retriever from Vector Store ---
+retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 5})
+
+# --- 4. Define Retriever Tool ---
+def azure_retrieve_tool(query: str) -> str:
+    """Retrieve relevant info from Azure AI Search Vector Index"""
     docs = retriever.invoke(query)
     return "\n\n".join([d.page_content for d in docs])
 
 retriever_tool = Tool(
-    name="AzureSearch",
-    func=search_azure,
-    description="Use this tool to search Azure AI Search for relevant information"
+    name="AzureVectorSearch",
+    func=azure_retrieve_tool,
+    description="Use this tool to search Azure AI Search vector index for relevant context."
 )
 
-# --- Initialize the Agent ---
+# --- 5. Initialize Azure OpenAI LLM ---
+llm = AzureChatOpenAI(
+    azure_deployment=AZURE_OPENAI_DEPLOYMENT,
+    azure_endpoint=AZURE_OPENAI_ENDPOINT,
+    api_key=AZURE_OPENAI_KEY,
+    temperature=0
+)
+
+# --- 6. Initialize Agent ---
 agent = initialize_agent(
     tools=[retriever_tool],
     llm=llm,
@@ -45,9 +58,9 @@ agent = initialize_agent(
     verbose=True
 )
 
-# --- Use the Agent ---
+# --- 7. Run single instruction ---
 if __name__ == "__main__":
-    instruction = "Generate 5 JSON formatted functional test cases for login API using related context."
+    instruction = "Generate 5 functional test cases for user registration API using relevant documentation."
     result = agent.invoke(instruction)
     print("\n--- Final Output ---\n")
     print(result["output"])
